@@ -1,0 +1,714 @@
+---
+title: "PSTAT 174 Edited Project"
+author: "Ethan Choi"
+date: "2023-05-31"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warnings = FALSE)
+```
+
+## Exploratory Data Analysis
+
+```{r Exploratory Data Analysis/Plotting and Analyzing Time Series, message=FALSE, warning=FALSE}
+# Reading in data
+nba.csv <- read.table("nba.csv", sep = ",", header = F, skip = 3)
+head(nba.csv)
+# Converting to a time series object
+nba <- ts(nba.csv[,2], start = c(2004, 1), frequency = 12)
+nba <- ts(nba[1:192])
+# Plotting times series
+plot.ts(nba, ylab = "NBA Popularity Score (out of 100)")
+
+# Creating training and test datasets
+nba_train <- nba[c(1:180)] # 2004 to 2019
+nba_test <- nba[c(181:192)] # 2020
+
+# Plotting training set
+plot.ts(nba_train, ylab = "NBA Popularity Score (out of 100)", main = "Training Dataset")
+fit1 <- lm(nba_train ~ as.numeric(1:length(nba_train))); abline(fit1, col="red")
+abline(h=mean(nba), col="blue")
+# This data is highly non-stationary, has linear trend, seasonality, non-constant variance
+
+# Confirming non-stationarity of original data (training set)
+hist(nba_train, col="light blue", xlab="", main="Histogram of NBA Training Set")
+# histogram is very skewed to the right
+acf(nba_train,lag.max=50, main="ACF of the NBA Training Set")
+# the acf remains large and periodic
+```
+
+At first I did my analysis from January 2004 to May 2023. However, the data from 2020 and beyond greatly skewed my plots of data and predictions. Therefore, I decided to only use data from January 2004 to December 2019.
+
+Based on the plot of this data, I can tell this data is highly non-stationary, has linear trend, seasonality, non-constant variance. Therefore, I may have to perform differencing and transformations.
+
+## Transforming and Differencing Time Series
+
+```{r Transforming and Differencing Time Series, message=FALSE, warning=FALSE}
+# Seeing if Box-Cox Transformation is necessary 
+# (because our data is skewed means non-constant variance)
+library(MASS)
+bcTransform <- boxcox(nba_train~ as.numeric(1:length(nba_train)))
+lambda <- bcTransform$x[which(bcTransform$y == max(bcTransform$y))]
+lambda
+# because our 95% confidence interval for lambda does not contain 1, 
+# we follow through with the Box-Cox transformation to stabilize variance
+# perhaps choose lambda = 0 because it is in the confidence interval. 
+# Then we can just use log() as our transformation.
+# because our confidence interval for lambda contains zero, we choose the log transformation.
+
+# Comparing Box-Cox vs. Log transformation vs Original Data
+
+# Box-Cox Transformation
+nba_train_bc <- (1/lambda)*(nba_train^lambda-1)
+
+# Log Transformation
+nba_train_log <- log(nba_train)
+
+# Comparing Variances of all three datasets 
+# (untransformed training set, box-cox transformed training set, log transformed training set)
+var(nba_train)
+var(nba_train_log)
+var(nba_train_bc)
+
+# Comparing Plots of Untransformed Data vs. Log Transformation
+op <- par(mfrow = c(1,2))
+plot.ts(nba_train)
+plot.ts(nba_train_log)
+# variance is much more stable after transformations compared to original data
+
+# Comparing histograms of all 3 datasets
+
+# Histogram of Untransformed Training Set
+op <- par(mfrow = c(1,3))
+hist_train <- hist(nba_train, col="light blue", xlab="", main="Histogram; NBA Training Set")
+
+# Histogram of Log Transformed Training Set
+hist_log <- hist(nba_train_log, col="light blue", xlab="", 
+                 main="Histogram; Log Transformed NBA Training Set")
+
+# Histogram of Box-Cox Transformed Training Set
+hist(nba_train_bc, col="light blue", xlab="", 
+     main="Histogram: Box-Cox Transformed NBA Training Set")
+# ultimately choose log transformation because 
+# it is simpler and there is not much difference between the box-cox and log transformations.
+# log transformation also gives most normal looking and symmetric histogram
+
+# Decomopostion of Log Transformed Training Set
+library(ggplot2)
+library(ggfortify)
+y <- ts(as.ts(nba_train_log), frequency = 12)
+decomp <- decompose(y)
+plot(decomp)
+# there is linear trend and seasonality that we have to get rid of
+
+# Differencing at lag 12 to remove seasonality
+var(nba_train_log)
+nba_train_log_12 <- diff(nba_train_log, lag=12)
+var(nba_train_log_12)
+# variance is lower after differencing at lag 12 once
+par(mfrow=c(1, 1))
+plot.ts(nba_train_log_12, main="Log Transformed Data Differenced at Lag 12")
+fit <- lm(nba_train_log_12 ~ as.numeric(1:length(nba_train_log_12))); abline(fit, col="red")
+mean(nba_train_log_12)
+abline(h=mean(nba_train_log_12), col="blue")
+# there is still slight linear trend, so try differencing at lag 1
+
+# Differencing at lag 1 to remove trend
+nba_train_log_12_1 <- diff(nba_train_log_12, lag=1)
+var(nba_train_log_12)
+var(nba_train_log_12_1) 
+# variance is higher so don't follow through with this differencing 
+# but only slightly so maybe difference if things don't work out.
+# END UP USING DATA DIFFERENCED AT LAG 12 AND LAG 1
+
+# Data looks stationary, check ACF to make sure
+acf(nba_train_log_12, lag.max=50, main="ACF of the Log Transformed Data, Differenced at Lag 12")
+# ACF checks out/looks stationary
+
+# Checking histograms to see if data is symmetric and Gaussian
+hist(nba_train_log_12, col="light blue", xlab="", 
+     main="Histogram; Log Transformed Data Differenced at Lag 12") 
+hist(nba_train_log_12, density=20,breaks=20, col="blue", xlab="", prob=TRUE)
+m<-mean(nba_train_log_12)
+std<- sqrt(var(nba_train_log_12))
+curve( dnorm(x,m,std), add=TRUE )
+# Although this histogram does not follow the normal curve exactly 
+# (heavy tailed outliers and slight dispersion close to the center) 
+# it is ok because we do not have an extremely large amount of observations 
+# (Reference Lecture 11 Slide 18)
+
+# Analysis of ACF & PACF
+acf(nba_train_log_12, lag.max=40, main="ACF of Log Transformed Data, Differenced at Lags 12")
+pacf(nba_train_log_12, lag.max=40, main="PACF of Log Transformed Data, Differenced at Lags 12")
+```
+
+Because our 95% confidence interval for lambda does not contain 1, we follow through with the Box-Cox transformation to stabilize variance.
+
+Because our confidence interval for lambda contains 0, we choose the log transformation.
+
+Difference at lag 12 to remove seasonality. Tried differencing at lag 1 but increased variance (only slightly though so maybe can use difference if there's unit roots in AR part of model) END UP USING THIS TRANSFORMATION
+
+From our differencing choices, we know **d=0, D=1, s=12**
+
+ACF lies outside of CI at lags 1,2,3,11,12,30 (used to determine q and Q) (disregard 30 due to Bartlett's formula)
+
+Because ACF lies outside CI at lag 12, suspect **Q=1**
+
+When looking for q, look between lags 1 and 12, suspect **q = 1, 2,3** (q=11 is covered by q =1) (most likely q =1)
+
+PACF lies outside of CI at lags 1, 12, 13, 24, 32, 36 (used to determine p and P)
+
+Because PACF lies outside of CI at lags 12 and 24 suspect **P=1**, **2**, maybe **P=3** because PACF lies outside CI at lag 36 (but may disregard because of Bartlett's formula) (most likely P=2)
+
+When looking for p, look between lags 1 and 12, suspect **p=1**
+
+## Model Estimation
+
+```{r Model Estimation, message=FALSE, warning=FALSE}
+library(qpcR)
+# Candidate models:
+df <- expand.grid(p=0:1, q=0:3, P=0:3, Q=0:1)
+df <- cbind(df, AICc=NA)
+# Testing Models and Computing AICcs:
+for (i in 1:nrow(df)) {
+sarima.obj <- NULL
+try(arima.obj <- arima(nba_train_log, order=c(df$p[i], 0, df$q[i]),
+seasonal=list(order=c(df$P[i], 1, df$Q[i]), period=12),
+method="ML"))
+if (!is.null(arima.obj)) { df$AICc[i] <- AICc(arima.obj) }
+# print(df[i, ])
+}
+df[which.min(df$AICc), ]
+head(df[order(df$AICc),]) # sorting models by lowest AICC
+# Code from lab 7 page 7
+df[order(df$AICc),]
+```
+
+Choose $SARIMA(1,0,2)(0,1,1)_{12}$ for diagnostic checking because it has the lowest AICc (-62.80332) and the least amount of parameters (4) of any of the six models with the lowest AICcs.
+
+Also, for the sake of completeness, test $SARIMA(1,0,2)(1,1,1)_{12}$ because it has the second lowest AICc (-62.07411) and the second least amount of parameters (4) of any of the six models with the lowest AICcs.
+
+```{r Editing Model A, message=FALSE, warning=FALSE}
+# Checking coefficients of SARIMA(1,0,2)(0,1,1)12 (Model A)
+model_a <- arima(nba_train_log, order=c(1,0,2), seasonal = list(order = c(0,1,1), 
+                                                                period = 12), method = "ML")
+model_a
+AICc(model_a)
+
+# 95% CIs for Coefficients
+confint(model_a) 
+# none of the confidence intervals contain 0 so no need to test variations of this model.
+
+# Checking stationarity and inveritibility of Model A
+library(UnitCircle)
+model_a
+# Checking AR part
+uc.check(pol_ = c(1, -0.9963), plot_output = TRUE) # PASS BUT SUPER CLOSE (CONSIDER UNIT ROOT)
+# Checking MA part
+uc.check(pol_ = c(1, -0.5344, -0.3184), plot_output = TRUE) # PASS
+```
+
+Model A Equation: $(1-0.9963B)(1-B^{12})X_t = (1-0.5344B-0.3184B^2)(1-0.6790B^{12})Z_t$
+
+```{r Editing Model B, message=FALSE, warning=FALSE}
+# Checking coefficients of SARIMA(1,0,2)(1,1,1)12 (Model B)
+model_b <- arima(nba_train_log, order=c(1,0,2), seasonal = list(order = c(1,1,1), 
+                                                                period = 12), method = "ML")
+model_b
+AICc(model_b)
+
+# 95% CIs for Coefficients
+confint(model_b) 
+# the sar1 coefficient CI contains 0 whcih means P = 0 (this case was tested in Model A)
+
+# Checking stationarity and inveritibility of Model B
+library(UnitCircle)
+model_b
+# Checking AR part
+uc.check(pol_ = c(1, -0.9950), plot_output = TRUE) # PASS BUT SUPER CLOSE (CONSIDER UNIT ROOT)
+# Checking MA part
+uc.check(pol_ = c(1, -0.5268, -0.3119), plot_output = TRUE) # PASS
+```
+
+Model B Equation: $(1-0.995B)(1+0.131B^{12})(1-B^{12})X_t = (1-0.5268B-0.3119B^2)(1-0.6095B^{12})Z_t$
+
+## Diagnostic Checking
+
+```{r Model A Diagnostic Checking, message=FALSE, warning=FALSE}
+# Residuals of SARIMA(1,0,2)(0,1,1)12 (Model A)
+res_a <- residuals(model_a)
+
+# Histogram of Residuals
+hist(res_a,density=20,breaks=20, col="blue", xlab="", prob=TRUE)
+m <- mean(res_a)
+std <- sqrt(var(res_a))
+curve( dnorm(x,m,std), add=TRUE )
+
+# Plot of residuals
+mean(res_a) # = 0.01827164 close to 0
+plot.ts(res_a)
+fitt <- lm(res_a ~ as.numeric(1:length(res_a))); abline(fitt, col="red")
+abline(h=mean(res_a), col="blue")
+# no trend, seasonality, or change of variance
+
+# Q-Q Plot
+qqnorm(res_a,main= "Normal Q-Q Plot for Model A: SARIMA(1,0,2)(0,1,1)12")
+qqline(res_a,col="blue")
+# fits OK, some deviation at the ends
+
+# ACF and PACF of residuals
+acf(res_a, lag.max=40) # within CI at all lags
+pacf(res_a, lag.max=40) # within CI at all lags except lag 22 which is OK
+
+# LOOK FOR P-VALUES GREATER THAN 0.05
+# lag = sqrt(n)
+# fitdf = number of coefficients estimated
+# Shapiro test
+shapiro.test(res_a) # p-value = 8.045e^-9 FAIL
+
+# Box-Pierce test
+Box.test(res_a, lag = 14, type = c("Box-Pierce"), fitdf = 4) # p-value = 0.2838 PASS
+
+# Ljung-Box Test
+Box.test(res_a, lag = 14, type = c("Ljung-Box"), fitdf = 4) # p-value = 0.2412 PASS
+
+# Mcleod-Li Test
+Box.test((res_a)^2, lag = 14, type = c("Ljung-Box"), fitdf = 0) # p-value = 0.9472 PASS
+
+# Yule-Walker Check
+ar(res_a, aic = TRUE, order.max = NULL, method = c("yule-walker")) 
+# Fitted residuals to white noise/AR(0) which is good
+```
+
+Model A's residuals fit normal curve pretty well, albeit there are some heavy tailed outliers.
+
+Model A fails the Shapiro-Wilk Test but passes all others tests
+
+```{r Model B Diagnostic Checking, message=FALSE, warning=FALSE}
+# Residuals of SARIMA(1,0,2)(1,1,1)12 (Model B)
+res_b <- residuals(model_b)
+
+# Histogram of Residuals
+hist(res_b,density=20,breaks=20, col="blue", xlab="", prob=TRUE)
+m <- mean(res_b)
+std <- sqrt(var(res_b))
+curve( dnorm(x,m,std), add=TRUE )
+# residuals follow normal curve pretty well, just some heavy tailed outliers
+
+# Plot of residuals
+mean(res_b) # = 0.01792038 close to 0 and slightly lower than Model A
+plot.ts(res_b)
+fitt <- lm(res_b ~ as.numeric(1:length(res_b))); abline(fitt, col="red")
+abline(h=mean(res_b), col="blue")
+# no trend, seasonality, or change of variance
+
+# Q-Q Plot
+qqnorm(res_b,main= "Normal Q-Q Plot for Model B: SARIMA(1,0,2)(1,1,1)12")
+qqline(res_b,col="blue")
+# fits OK, some deviation at the ends
+
+# ACF and PACF of residuals
+acf(res_b, lag.max=40) # within CI at all lags
+pacf(res_b, lag.max=40) # within CI at all lags except lag 22 which is OK
+
+# LOOK FOR P-VALUES GREATER THAN 0.05
+# lag = sqrt(n)
+# fitdf = number of coefficients estimated
+# Shapiro test
+shapiro.test(res_b) # p-value = 5.93e^-9 FAIL
+
+# Box-Pierce test
+Box.test(res_b, lag = 14, type = c("Box-Pierce"), fitdf = 5) # p-value = 0.2292 PASS
+
+# Ljung-Box Test
+Box.test(res_b, lag = 14, type = c("Ljung-Box"), fitdf = 5) # p-value = 0.1956 PASS
+
+# Mcleod-Li Test
+Box.test((res_b)^2, lag = 14, type = c("Ljung-Box"), fitdf = 0) # p-value = 0.9704 PASS
+
+# Yule-Walker Check
+ar(res_b, aic = TRUE, order.max = NULL, method = c("yule-walker")) 
+# Fitted residuals to white noise/AR(0) which is good
+```
+
+Both models passed all diagnostic checking except Shapiro-Wilk test. To see which one is better, I take both of them to the forecasting step to see which model makes better predictions of the test set.
+
+## Forecasting
+
+```{r Forecasting with Model A, message=FALSE, warning=FALSE}
+library(forecast)
+fit.A <- arima(nba_train_log, order=c(1,0,2), seasonal = list(order = c(0,1,1), 
+                                                              period = 12), method = "ML")
+forecast(fit.A)
+
+# Graph with 12 forecasts on transformed data
+pred.tr <- predict(fit.A, n.ahead = 12)
+U.tr= pred.tr$pred + 2*pred.tr$se # upper bound of prediction interval
+L.tr= pred.tr$pred - 2*pred.tr$se # lower bound
+ts.plot(nba_train_log, xlim=c(1,length(nba_train_log)+12), ylim = c(min(nba_train_log),max(U.tr)))
+lines(U.tr, col="blue", lty="dashed")
+lines(L.tr, col="blue", lty="dashed")
+points((length(nba_train_log)+1):(length(nba_train_log)+12), pred.tr$pred, col="red")
+
+# Graph with forecasts on original data
+pred.orig <- exp(pred.tr$pred)
+U= exp(U.tr)
+L= exp(L.tr)
+ts.plot(nba_train, xlim=c(1,length(nba_train)+12), ylim = c(min(nba_train),max(U)))
+lines(U, col="blue", lty="dashed")
+lines(L, col="blue", lty="dashed")
+points((length(nba_train)+1):(length(nba_train)+12), pred.orig, col="red")
+
+# Zoom into graph starting from entry 100
+ts.plot(nba_train, xlim = c(100,length(nba_train)+12), ylim = c(0,max(U)))
+lines(U, col="blue", lty="dashed")
+lines(L, col="blue", lty="dashed")
+points((length(nba_train)+1):(length(nba_train)+12), pred.orig, col="red")
+# All predictions fall within prediciton interval
+
+# Zoom into graph starting from entry 100 with forecasts and true values
+ts.plot(nba, xlim = c(100,length(nba_train)+12), ylim = c(0,max(U)), col="red")
+lines(U, col="blue", lty="dashed")
+lines(L, col="blue", lty="dashed")
+points((length(nba_train)+1):(length(nba_train)+12), pred.orig, col="black")
+
+# Comparing predictions and actual values
+pred.orig
+nba_test
+```
+
+All my predictions using Model A are within the confidence interval and seem to be pretty close to actual values in test set. Good!
+
+```{r Forecasting with Model B, message=FALSE, warning=FALSE}
+fit.B <- arima(nba_train_log, order=c(1,0,2), seasonal = list(order = c(1,1,1), 
+                                                              period = 12), method = "ML")
+forecast(fit.B)
+
+# Graph with 12 forecasts on transformed data
+pred.tr_b <- predict(fit.B, n.ahead = 12)
+U.tr_b= pred.tr_b$pred + 2*pred.tr_b$se # upper bound of prediction interval
+L.tr_b= pred.tr_b$pred - 2*pred.tr_b$se # lower bound
+ts.plot(nba_train_log, xlim=c(1,length(nba_train_log)+12), ylim = c(min(nba_train_log),max(U.tr_b)))
+lines(U.tr_b, col="blue", lty="dashed")
+lines(L.tr_b, col="blue", lty="dashed")
+points((length(nba_train_log)+1):(length(nba_train_log)+12), pred.tr_b$pred, col="red")
+
+# Graph with forecasts on original data
+pred.orig_b <- exp(pred.tr_b$pred)
+U_b= exp(U.tr_b)
+L_b= exp(L.tr_b)
+ts.plot(nba_train, xlim=c(1,length(nba_train)+12), ylim = c(min(nba_train),max(U_b)))
+lines(U_b, col="blue", lty="dashed")
+lines(L_b, col="blue", lty="dashed")
+points((length(nba_train)+1):(length(nba_train)+12), pred.orig_b, col="red")
+
+# Zoom into graph starting from entry 150
+ts.plot(nba_train, xlim = c(150,length(nba_train)+12), ylim = c(0,max(U_b)))
+lines(U_b, col="blue", lty="dashed")
+lines(L_b, col="blue", lty="dashed")
+points((length(nba_train)+1):(length(nba_train)+12), pred.orig_b, col="red")
+# All predictions fall within prediciton interval
+
+# Zoom into graph starting from entry 150 with forecasts and true values
+ts.plot(nba, xlim = c(150,length(nba_train)+12), ylim = c(0,max(U_b)), col="red")
+lines(U_b, col="blue", lty="dashed")
+lines(L_b, col="blue", lty="dashed")
+points((length(nba_train)+1):(length(nba_train)+12), pred.orig_b, col="black")
+
+# Comparing predictions and actual values
+pred.orig
+pred.orig_b
+nba_test
+
+sum(pred.orig-nba_test)
+sum(pred.orig_b-nba_test)
+```
+
+All my predictions using Model B are within the confidence interval and seem to be pretty close to actual values in test set. Good!
+
+I ultimately choose Model A because it is the simpler model and the predictions made by Models A and B are nearly identical and about equally as good at predicting the values of the test set.
+
+## Testing Models After Data Differenced at Lag 12 and Lag 1
+
+```{r Testing Data differenced at lag 12 and lag 1, message=FALSE, warning=FALSE}
+# Comparing Variance
+var(nba_train_log_12)
+var(nba_train_log_12_1)
+
+# Plot of data after differencing at lag 12 and lag 1
+par(mfrow=c(1, 1))
+plot.ts(nba_train_log_12_1, main="Log Transformed Data Differenced at Lag 12 and Lag 1")
+fit <- lm(nba_train_log_12_1 ~ as.numeric(1:length(nba_train_log_12_1))); abline(fit, col="red")
+mean(nba_train_log_12_1)
+abline(h=mean(nba_train_log_12_1), col="blue")
+
+# Checking ACF to confirm stationarity
+acf(nba_train_log_12_1, lag.max=40, 
+    main="ACF of the Log Transformed Data Differenced at Lag 12 and Lag 1")
+# looks stationary
+
+# Checking histograms to see if data is symmetric and Gaussian
+hist(nba_train_log_12_1, col="light blue", xlab="", 
+     main="Histogram; Log Transformed Data Differenced at Lag 12 and Lag 1") 
+hist(nba_train_log_12_1, density=20,breaks=20, col="blue", xlab="", 
+     main ="Histogram; Log Transformed Data Differenced at Lag 12 and Lag 1", prob=TRUE)
+m<-mean(nba_train_log_12_1)
+std<- sqrt(var(nba_train_log_12_1))
+curve( dnorm(x,m,std), add=TRUE )
+
+# Analysis of ACF & PACF
+acf(nba_train_log_12_1, lag.max=40, 
+    main="ACF of Log Transformed Data Differenced at Lag 12 and Lag 1")
+pacf(nba_train_log_12_1, lag.max=40, 
+     main="PACF of Log Transformed Data Differenced at Lag 12 and Lag 1")
+
+# Candidate models:
+p <- c(0, 1, 2, 5)
+df_test <- expand.grid(p=p, q=0:2, P=0:2, Q=0:1)
+df_test <- cbind(df_test, AICc=NA)
+# Testing Models and Computing AICcs:
+for (i in 1:nrow(df_test)) {
+sarima.obj <- NULL
+try(arima.obj <- arima(nba_train_log, order=c(df_test$p[i], 1, df_test$q[i]),
+seasonal=list(order=c(df_test$P[i], 1, df_test$Q[i]), period=12),
+method="ML"))
+if (!is.null(arima.obj)) { df_test$AICc[i] <- AICc(arima.obj) }
+# print(df[i, ])
+}
+df_test[which.min(df_test$AICc), ]
+head(df_test[order(df_test$AICc),]) # sorting models by lowest AICC
+# Code from lab 7 page 7
+df_test[order(df_test$AICc),]
+```
+
+Variance after differencing at lag 1 and lag 12 is slightly higher but try using this data because both of the best models created using the data only differencing at lag 12 have roots in the AR part that are very close to the unit circle, which indicates under-differencing.
+
+The plot of the data after differencing at lag 1 and lag 12 looks like white noise
+
+After differencing at lag 12 and lag 1, the histogram of the data fits the normal curve decently. There are some heavy-tailed outliers. Won't fit normal curve perfectly or be exactly symmetrical because we don't have a lot of observations (Lec. 11 Slide 18) and our data displays short rises and sudden drops (Non-Gaussian behavior) corresponding to when the NBA is in season versus when it is not. Because of this behavior, later on when doing diagnostic checking, we don't expect the model's residuals to pass the Shapiro-Wilk Test.
+
+From our differencing choices we know **d=1, D=1, s=12**
+
+ACF lies outside of CI at lags 0,1,2,12,13,30 (used to determine q and Q) (disregard 30 due to Bartlett's formula)
+
+Because ACF lies outside CI at lag 12, suspect **Q=1**
+
+When looking for q, look between lags 1 and 12, suspect **q = 0,1, 2** (q=13 is covered by q =1) (most likely q =1)
+
+PACF lies outside of CI at lags 1, 2, 5, 11, 12, 14, 23, 24 (used to determine p and P)
+
+Because PACF lies outside of CI at lags 12 and 24 suspect **P=0, 1**, **2**, (most likely P=2)
+
+When looking for p, look between lags 1 and 12, suspect **p=1, 2, 5**
+
+Choose $SARIMA(0,1,2)(0,1,1)_{12}$ for diagnostic checking because it has the lowest AICc (-63.03148) and is tied for the least amount of parameters (3) of any of the six models with the lowest AICcs. (Call this Model C)
+
+Also consider $SARIMA(1,1,1)(0,1,1)_{12}$ for diagnostic checking because it has the second lowest AICc (-62.55753) and is tied for the least amount of parameters (3) of any of the six models with the lowest AICcs. (Call this Model D)
+
+## Model C
+
+```{r Editing Model C, message=FALSE, warning=FALSE}
+# Checking Coefficients of Model C
+# Checking coefficients of SARIMA(0,1,2)(0,1,1)12 (Model C)
+model_c <- arima(nba_train_log, order=c(0,1,2), seasonal = list(order = c(0,1,1), 
+                                                                period = 12), method = "ML")
+model_c
+AICc(model_c)
+
+# 95% CIs for Coefficients of Model C
+confint(model_c) 
+# none of the confidence intervals contain 0 so no need to test variations of this model.
+
+# Checking stationarity and inveritibility of Model C
+# This is a pure MA model so it is automatically stationary
+library(UnitCircle)
+model_c
+# Seasonal part is invertible because the absolute value of the coefficient is less than 1
+# Checking MA part
+uc.check(pol_ = c(1, -0.5366, -0.3233), plot_output = TRUE) # PASS
+```
+
+Model C Equation: $(1-B)(1-B^{12})X_t = (1-0.5366B-0.3233B^2)(1-0.6828B^{12})Z_t$
+
+This model is better than the ones using data after only differencing at lag 12 because it has no unit roots (or roots that are pretty much unit roots like AR part in Models A and B)
+
+```{r Diagnstic Checking Model C, message=FALSE, warning=FALSE}
+# Residuals of SARIMA(0,1,2)(0,1,1)12 (Model C)
+res_c <- residuals(model_c)
+
+# Histogram of Residuals
+hist(res_c,density=20,breaks=20, col="blue", xlab="", prob=TRUE)
+m <- mean(res_c)
+std <- sqrt(var(res_c))
+curve(dnorm(x,m,std), add=TRUE )
+
+# Plot of residuals
+op <- par(mfrow = c(1,2))
+mean(res_c) # = 0.01210592 close to 0
+plot.ts(res_c, main = "Model C Residuals")
+fitt <- lm(res_c ~ as.numeric(1:length(res_c))); abline(fitt, col="red")
+abline(h=mean(res_c), col="blue")
+# no trend, seasonality, or change of variance
+
+# Q-Q Plot
+qqnorm(res_c,main= "Normal Q-Q Plot for Model C: SARIMA(0,1,2)(0,1,1)12")
+qqline(res_c,col="blue")
+# fits OK, some deviation at the ends
+
+# ACF and PACF of residuals
+acf(res_c, lag.max=40) # within CI at all lags
+pacf(res_c, lag.max=40) # within CI at all lags except lag 22 which is OK
+
+# LOOK FOR P-VALUES GREATER THAN 0.05
+# lag = sqrt(n) rounded to closest integer
+# fitdf = number of coefficients estimated
+# Shapiro test
+shapiro.test(res_c) # p-value = 0.000000008938 FAIL
+
+# Box-Pierce test
+Box.test(res_c, lag = 14, type = c("Box-Pierce"), fitdf = 3) # p-value = 0.3788 PASS
+
+# Ljung-Box Test
+Box.test(res_c, lag = 14, type = c("Ljung-Box"), fitdf = 3) # p-value = 0.33 PASS
+
+# Mcleod-Li Test
+Box.test((res_c)^2, lag = 14, type = c("Ljung-Box"), fitdf = 0) # p-value = 0.9579 PASS
+
+# Yule-Walker Check
+ar(res_c, aic = TRUE, order.max = NULL, method = c("yule-walker")) 
+# Fitted residuals to white noise/AR(0) which is good
+```
+
+Model C's residuals fit normal curve pretty well, albeit there are some heavy tailed outliers.
+
+Fails Shapiro-Wilk test (explained earlier why we expect this), but passes all other tests
+
+Mention that this data is similar to Influenza data in Lec.12 Slide 19 and that a heavy tailed or non-linear model may be a better fit for this data because it is not symmetric
+
+```{r Forecasting with Model C, message=FALSE, warning=FALSE}
+fit.C <- arima(nba_train_log, order=c(0,1,2), seasonal = list(order = c(0,1,1), 
+                                                              period = 12), method = "ML")
+forecast(fit.C)
+
+# Graph with 12 forecasts on transformed data
+pred.tr_c <- predict(fit.C, n.ahead = 12)
+U.tr_c= pred.tr_c$pred + 2*pred.tr_c$se # upper bound of prediction interval
+L.tr_c= pred.tr_c$pred - 2*pred.tr_c$se # lower bound
+ts.plot(nba_train_log, xlim=c(1,length(nba_train_log)+12), ylim = c(min(nba_train_log),max(U.tr_c)))
+lines(U.tr_c, col="blue", lty="dashed")
+lines(L.tr_c, col="blue", lty="dashed")
+points((length(nba_train_log)+1):(length(nba_train_log)+12), pred.tr_c$pred, col="red")
+
+# Graph with forecasts on original data
+pred.orig_c <- exp(pred.tr_c$pred)
+U_c= exp(U.tr_c)
+L_c= exp(L.tr_c)
+ts.plot(nba_train, xlim=c(1,length(nba_train)+12), ylim = c(min(nba_train),max(U_c)), 
+        main = "Forecast of Original, Untransformed Data")
+lines(U_c, col="blue", lty="dashed")
+lines(L_c, col="blue", lty="dashed")
+points((length(nba_train)+1):(length(nba_train)+12), pred.orig_c, col="red")
+
+# Zoom into graph starting from entry 168 (last two years)
+ts.plot(nba_train, xlim = c(168,length(nba_train)+12), ylim = c(0,max(U_c)), 
+        main = "Forecast of Original, Untransformed Data 2019-2020")
+lines(U_c, col="blue", lty="dashed")
+lines(L_c, col="blue", lty="dashed")
+points((length(nba_train)+1):(length(nba_train)+12), pred.orig_c, col="red")
+# All predictions fall within prediciton interval
+
+# Zoom into graph starting from entry 168 with forecasts and true values (last two years)
+ts.plot(nba, xlim = c(168,length(nba_train)+12), ylim = c(0,max(U_c)), col="red", 
+        main = "Forecast of Original Data 2019-2020 With True Values")
+lines(U_c, col="blue", lty="dashed")
+lines(L_c, col="blue", lty="dashed")
+points((length(nba_train)+1):(length(nba_train)+12), pred.orig_c, col="black")
+
+# Comparing predictions and actual values
+pred.orig_c
+nba_test
+```
+
+All my predictions using Model C are within the confidence interval and seem to be pretty close to actual values in test set. Good!
+
+## Model D
+
+```{r Editing Model D, message=FALSE, warning=FALSE}
+# Checking Coefficients of Model D
+# Checking coefficients of SARIMA(1,1,1)(0,1,1)12 (Model D)
+model_d <- arima(nba_train_log, order=c(1,1,1), seasonal = list(order = c(0,1,1), 
+                                                                period = 12), method = "ML")
+model_d
+AICc(model_d)
+
+# 95% CIs for Coefficients of Model D
+confint(model_d) 
+# none of the confidence intervals contain 0 so no need to test variations of this model.
+
+# Checking stationarity and inveritibility of Model D
+library(UnitCircle)
+model_d
+# Seasonal part is stationary and invertible 
+# because the absolute value of the coefficient is less than 1
+# Checking AR part
+uc.check(pol_ = c(1, -0.3716), plot_output = TRUE) # PASS
+# Checking MA part
+uc.check(pol_ = c(1, -0.9335), plot_output = TRUE) # PASS
+```
+
+Model D Equation: $(1-0.3716B)(1-B)(1-B^{12})X_t = (1-0.9335B)(1-0.6794B^{12})Z_t$
+
+This model is better than the ones using data after only differencing at lag 12 because it has no unit roots (or roots that are pretty much unit roots like AR part in Models A and B)
+
+```{r Diagnostic Checking Model D, message=FALSE, warning=FALSE}
+# Residuals of SARIMA(0,1,2)(0,1,1)12 (Model C)
+res_d <- residuals(model_d)
+
+# Histogram of Residuals
+hist(res_d,density=20,breaks=20, col="blue", xlab="", prob=TRUE)
+m <- mean(res_d)
+std <- sqrt(var(res_d))
+curve(dnorm(x,m,std), add=TRUE )
+
+# Plot of residuals
+mean(res_d) # = 0.01506132 close to 0
+plot.ts(res_d, main = "Model D Residuals")
+fitt <- lm(res_d ~ as.numeric(1:length(res_d))); abline(fitt, col="red")
+abline(h=mean(res_d), col="blue")
+# no trend, seasonality, or change of variance
+
+# Q-Q Plot
+qqnorm(res_d,main= "Normal Q-Q Plot for Model D: SARIMA(1,1,1)(0,1,1)12")
+qqline(res_d,col="blue")
+# fits OK, some deviation at the ends
+
+# ACF and PACF of residuals
+acf(res_d, lag.max=40) # within CI at all lags (Bartlett's formula)
+pacf(res_d, lag.max=40) # within CI at all lags except lag 22 which is OK
+
+# LOOK FOR P-VALUES GREATER THAN 0.05
+# lag = sqrt(n) rounded to closest integer
+# fitdf = number of coefficients estimated
+# Shapiro test
+shapiro.test(res_d) # p-value = 0.00000000987 FAIL
+
+# Box-Pierce test
+Box.test(res_d, lag = 14, type = c("Box-Pierce"), fitdf = 3) # p-value = 0.231 PASS
+
+# Ljung-Box Test
+Box.test(res_d, lag = 14, type = c("Ljung-Box"), fitdf = 3) # p-value = 0.1951 PASS
+
+# Mcleod-Li Test
+Box.test((res_d)^2, lag = 14, type = c("Ljung-Box"), fitdf = 0) # p-value = 0.9478 PASS
+
+# Yule-Walker Check
+ar(res_d, aic = TRUE, order.max = NULL, method = c("yule-walker")) 
+# Fitted residuals to white noise/AR(0) which is good
+```
+
+Histogram of residuals follows normal curve decently well, albeit there are some heavy tailed outliers.
+
+Fails Shapiro-Wilk test (explained earlier why we expect this), but passes all other tests
+
+Ultimately, go onto forecasting with Model C because it has the lower AICc and both models have the same amount of parameters and pretty much the same diagnostics.
